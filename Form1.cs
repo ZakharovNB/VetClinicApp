@@ -16,63 +16,69 @@ namespace VetClinicApp
 {
     public partial class Form1 : Form
     {
-        private static string connectionString = ConfigurationManager.ConnectionStrings["vetClinicDBConnection"].ConnectionString;
-        SqlConnection sqlConnection = new SqlConnection(connectionString);
+        private SqlConnection sqlConnection = null;
+        private SqlCommandBuilder sqlCommandBuilder = null;
+        private SqlDataAdapter sqlDataAdapter = null;
+        private DataSet dataSet = null;
         string imgPath = String.Empty;
 
         public Form1() => InitializeComponent();
         private void Form1_Load(object sender, EventArgs e)
         {
+            sqlConnection = new SqlConnection(ConfigurationManager.ConnectionStrings["vetClinicDBConnection"].ConnectionString);
             sqlConnection.Open();
-            UpdateOwnerTable(dgvOwners, sqlConnection);
+            LoadOwnerTable();
         }
 
-        // Заполнение (обновление) DataGridView данными из таблицы "owner":
-        public static void UpdateOwnerTable(DataGridView dgv, SqlConnection connStr)
-        {
+        // Заполнение DataGridView данными из таблиц "owner" и "pet":
+        public void LoadOwnerTable()
+        {            
             string query = @"SELECT 
-                                owner_id AS id,
-                                first_name AS Имя,
-                                last_name AS Фамилия,
-                                adress AS Адрес,
-                                phone_number AS Телефон,
-                                email AS Email 
+                                owner_id AS [Id владельца],
+                                first_name AS [Имя],
+                                last_name AS [Фамилия],
+                                adress AS [Адрес],
+                                phone_number AS [Телефон],
+                                email AS [E-mail],
+                                (SELECT string_agg(pet_id, ', ') FROM pet WHERE owner = owner_id) AS [Id питомцев]
                              FROM owner";
 
-            SqlDataAdapter dataAdapter = new SqlDataAdapter(query, connStr);
-            DataSet dataSet = new DataSet();
-            dataAdapter.Fill(dataSet);
-            dgv.DataSource = dataSet.Tables[0];
+            sqlDataAdapter = new SqlDataAdapter(query, sqlConnection);
+            sqlCommandBuilder = new SqlCommandBuilder(sqlDataAdapter);
+            sqlCommandBuilder.GetUpdateCommand();
+            dataSet = new DataSet();
+            sqlDataAdapter.Fill(dataSet, "Owner");
+            dgvOwners.DataSource = dataSet.Tables["Owner"];
+            dgvOwners.Columns["id владельца"].ReadOnly = true; // id только для чтения
+        }
+
+        // Обновление DataGridView данными из таблицы "owner":
+        public void ReloadOwnerTable()
+        {
+            dataSet.Tables["Owner"].Clear();
+            sqlDataAdapter.Fill(dataSet, "Owner");
+            dgvOwners.DataSource = dataSet.Tables["Owner"];
+            lblUploadImg.ForeColor = Color.Green;
+            lblUploadImg.Text = "Данные в таблице обновлены";
         }
 
         // Получить id последней добавленной строки:
-        public static string GetLastId(SqlConnection sqlConnection)
+        public string GetLastId()
         {
             SqlCommand sqlCommand = new SqlCommand("SELECT @@IDENTITY", sqlConnection);
             return sqlCommand.ExecuteScalar().ToString();
         }
 
         // Получение закодированного представления изображаения:
-        public static byte[] GetBytePhoto(string imgPath)
+        public byte[] GetBytePhoto()
         {
             FileStream stream = new FileStream(imgPath, FileMode.Open, FileAccess.Read);
             BinaryReader reader = new BinaryReader(stream);
             return reader.ReadBytes((int) stream.Length);
         }
 
-        // Изменение данных в поле таблицы для строки, соответствующей переданному id:
-        public static void UpdateData(string tableName, string columnName, string value, string id, SqlConnection sqlConnection)
-        {
-            if(value != "")
-            {           
-                string query = $"UPDATE {tableName} SET {columnName} = N'{value}' WHERE owner_id = {id}";
-                SqlCommand sqlCommand = new SqlCommand(query, sqlConnection);
-                sqlCommand.ExecuteNonQuery();
-            }
-        }
-
         // Добавление питомца:
-        public static void InsertPet(string pet_type, string name, string birthday_date, string ownerId, string imgPath, SqlConnection sqlConnection)
+        public void InsertPet(string pet_type, string name, string birthday_date, string ownerId, string imgPath)
         {
             string query = @"INSERT INTO pet(pet_type, name, birthday_date, owner, photo) 
                              VALUES (@pet_type, @name, @birthday_date, @owner, @photo);";
@@ -84,13 +90,13 @@ namespace VetClinicApp
             sqlCommand.Parameters.AddWithValue("pet_type", pet_type);
             sqlCommand.Parameters.AddWithValue("name", name);
             sqlCommand.Parameters.AddWithValue("birthday_date", $"{petBirthday.Month}/{petBirthday.Day}/{petBirthday.Year}");
-            sqlCommand.Parameters.AddWithValue("photo", GetBytePhoto(imgPath));
+            sqlCommand.Parameters.AddWithValue("photo", GetBytePhoto());
 
             MessageBox.Show(sqlCommand.ExecuteNonQuery() == 0 ? "Питомец не добавлен" : "Питомец успешно добавлен");
         }
 
         // Добавление владельца:
-        public static void InsertOwner(string first_name, string last_name, string adress, string phone_number, string email, SqlConnection sqlConnection)
+        public void InsertOwner(string first_name, string last_name, string adress, string phone_number, string email)
         {
             string query = @"INSERT INTO owner(first_name, last_name, adress, phone_number, email) 
                              VALUES (@first_name, @last_name, @adress, @phone_number, @email);";
@@ -106,7 +112,7 @@ namespace VetClinicApp
         }
 
         // Проверка на наличие в таблице строки со значение value в колонке:
-        public static bool IsInTable(string tableName, string columnName, string value, SqlConnection sqlConnection)
+        public bool IsInTable(string tableName, string columnName, string value)
         {
             SqlCommand sqlCommand = new SqlCommand($"SELECT * FROM {tableName} WHERE {columnName} LIKE '{value}'", sqlConnection);
             SqlDataReader dataReader = sqlCommand.ExecuteReader();
@@ -144,11 +150,16 @@ namespace VetClinicApp
             }
             else
             {
-                if (IsInTable("owner", "phone_number", tbOwnerPhone.Text, sqlConnection)) // Телефон владельца есть в БД?
+                if (IsInTable("owner", "phone_number", tbOwnerPhone.Text)) // Телефон владельца есть в БД?
                 {
                     if (tbPetType.Text == "" || tbPetName.Text == "" || tbPetBday.Text == "" || imgPath == String.Empty) // Все данные питомца НЕ заполнены?
                     {
                         MessageBox.Show("ОШИБКА: все данные питомца должны быть заполнены");
+                        if (imgPath == String.Empty)
+                        {
+                            lblUploadImg.ForeColor = Color.Red;
+                            lblUploadImg.Text = "Загрузите фотографию питомца";
+                        }
                     }
                     else // Все данные питомца заполнены
                     {
@@ -164,7 +175,8 @@ namespace VetClinicApp
                         }
                         dataReader.Close();
 
-                        InsertPet(tbPetType.Text, tbPetName.Text, tbPetBday.Text, ownerId, imgPath, sqlConnection);
+                        InsertPet(tbPetType.Text, tbPetName.Text, tbPetBday.Text, ownerId, imgPath);
+                        ReloadOwnerTable();
                         lblUploadImg.ForeColor = Color.Green;
                         lblUploadImg.Text = "Данные о новом питомце успешно добавлены";
                     }
@@ -180,20 +192,65 @@ namespace VetClinicApp
                         if (tbPetType.Text == "" || tbPetName.Text == "" || tbPetBday.Text == "" || imgPath == String.Empty) // Все данные питомца НЕ заполнены?
                         {
                             MessageBox.Show("ОШИБКА: все данные питомца должны быть заполнены");
+                            if (imgPath == String.Empty)
+                            {
+                                lblUploadImg.ForeColor = Color.Red;
+                                lblUploadImg.Text = "Загрузите фотографию питомца";
+                            }
                         }
                         else // Все данные питомца заполнены
                         {
                             // Добавить в БД владельца и питомца
 
-                            InsertOwner(tbOwnerFName.Text, tbOwnerLName.Text, tbOwnerAdress.Text, tbOwnerPhone.Text, tbOwnerEmail.Text, sqlConnection);
-                            InsertPet(tbPetType.Text, tbPetName.Text, tbPetBday.Text, GetLastId(sqlConnection), imgPath, sqlConnection);
-                            UpdateOwnerTable(dgvOwners, sqlConnection);
+                            InsertOwner(tbOwnerFName.Text, tbOwnerLName.Text, tbOwnerAdress.Text, tbOwnerPhone.Text, tbOwnerEmail.Text);
+                            InsertPet(tbPetType.Text, tbPetName.Text, tbPetBday.Text, GetLastId(), imgPath);
+                            ReloadOwnerTable();
                             lblUploadImg.ForeColor = Color.Green;
                             lblUploadImg.Text = "Данные о питомце и владельце успешно добавлены";
                         }
                     }
                 }
             }
+        }
+
+        // Очистка полей от введенных данных:
+        private void btnResetData_Click(object sender, EventArgs e)
+        {
+            tbOwnerFName.Text = String.Empty;
+            tbOwnerLName.Text = String.Empty;
+            tbOwnerAdress.Text = String.Empty;
+            tbOwnerPhone.Text = String.Empty;
+            tbOwnerEmail.Text = String.Empty;
+            tbPetType.Text = String.Empty;
+            tbPetName.Text = String.Empty;
+            tbPetBday.Text = String.Empty;
+            imgPath = String.Empty;
+        }
+
+        // Внесение изменений из DataGridView в БД при нажатии клавиши Enter
+        private void dgvOwners_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            if (e.KeyChar == (Char)Keys.Enter)
+            {
+                DataTable dt = dgvOwners.DataSource as DataTable;
+                int rowIndex = dgvOwners.SelectedCells[0].RowIndex;
+                dataSet.Tables["Owner"].Rows[rowIndex][1] = dt.Rows[rowIndex]["Имя"];
+                dataSet.Tables["Owner"].Rows[rowIndex][2] = dt.Rows[rowIndex]["Фамилия"];
+                dataSet.Tables["Owner"].Rows[rowIndex][3] = dt.Rows[rowIndex]["Адрес"];
+                dataSet.Tables["Owner"].Rows[rowIndex][4] = dt.Rows[rowIndex]["Телефон"];
+                dataSet.Tables["Owner"].Rows[rowIndex][5] = dt.Rows[rowIndex]["E-mail"];
+                sqlDataAdapter.Update(dataSet, "Owner");
+                MessageBox.Show("Данные успешно изменены");
+                lblUploadImg.ForeColor = Color.Black;
+                lblUploadImg.Text = "...";
+            }
+        }
+
+        // Отслеживание изменения в DataGridView
+        private void dgvOwners_CellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            lblUploadImg.ForeColor = Color.Orange;
+            lblUploadImg.Text = "Нажмите Enter для применения изменений";
         }
     }
 }
